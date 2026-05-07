@@ -64,17 +64,26 @@ export const db = {
     return undefined;
   },
   getExams: async (level?: 'SD'): Promise<Exam[]> => {
-    // Optimization: Select only required columns and sum up real question lengths
-    const { data } = await supabase.from('subjects').select('id, name, duration, question_count, token, is_active, education_level, shuffle_questions, shuffle_options, school_access, questions(id, points)');
-    if(!data) return [];
-    return data.map(d => ({
-        id: d.id, title: d.name, subject: d.name, durationMinutes: d.duration, 
-        questionCount: d.questions?.length || 0,
-        token: d.token || '', isActive: d.is_active, 
-        questions: d.questions as unknown as Question[] || [], // Partial array of Questions for points counting
-        educationLevel: d.education_level || 'SD',
-        shuffleQuestions: d.shuffle_questions, shuffleOptions: d.shuffle_options, schoolAccess: d.school_access || []
-    }));
+    try {
+        // Optimization: Select only required columns and sum up real question lengths
+        const { data, error } = await supabase.from('subjects').select('id, name, duration, question_count, token, is_active, education_level, shuffle_questions, shuffle_options, school_access, questions(id, points)');
+        if (error) {
+            console.error("Error fetching exams:", error);
+            return [];
+        }
+        if(!data) return [];
+        return data.map(d => ({
+            id: d.id, title: d.name, subject: d.name, durationMinutes: d.duration, 
+            questionCount: d.questions?.length || 0,
+            token: d.token || '', isActive: d.is_active, 
+            questions: d.questions as unknown as Question[] || [], // Partial array of Questions for points counting
+            educationLevel: d.education_level || 'SD',
+            shuffleQuestions: d.shuffle_questions, shuffleOptions: d.shuffle_options, schoolAccess: d.school_access || []
+        }));
+    } catch (e) {
+        console.error("Crash during getExams:", e);
+        return [];
+    }
   },
   updateExamToken: async (examId: string, newToken: string): Promise<void> => {
     await supabase.from('subjects').update({ token: newToken }).eq('id', examId);
@@ -107,24 +116,29 @@ export const db = {
     }, { onConflict: 'exam_id,peserta_id' });
   },
   getAllResults: async (): Promise<ExamResult[]> => {
-    const [data, students, subjects] = await Promise.all([
-        fetchAllRows('results', '*', { status: 'finished' }),
-        fetchAllRows('students', 'id, name'),
-        fetchAllRows('subjects', 'id, name')
-    ]);
+    try {
+        const [data, students, subjects] = await Promise.all([
+            fetchAllRows('results', '*', { status: 'finished' }),
+            fetchAllRows('students', 'id, name'),
+            fetchAllRows('subjects', 'id, name')
+        ]);
 
-    return data.map(d => {
-        const student = students.find(s => s.id === d.peserta_id);
-        const subject = subjects.find(s => s.id === d.exam_id);
-        return {
-            id: d.id, studentId: d.peserta_id, examId: d.exam_id, 
-            score: d.score, submittedAt: d.finish_time,
-            studentName: student?.name || 'Unknown', 
-            examTitle: subject?.name || 'Unknown',
-            totalQuestions: 0, cheatingAttempts: d.violation_count || 0, 
-            answers: d.answers, status: d.status
-        };
-    });
+        return data.map(d => {
+            const student = students.find((s: any) => s.id === d.peserta_id);
+            const subject = subjects.find((s: any) => s.id === d.exam_id);
+            return {
+                id: d.id, studentId: d.peserta_id, examId: d.exam_id, 
+                score: d.score, submittedAt: d.finish_time,
+                studentName: student?.name || 'Unknown', 
+                examTitle: subject?.name || 'Unknown',
+                totalQuestions: 0, cheatingAttempts: d.violation_count || 0, 
+                answers: d.answers, status: d.status
+            };
+        });
+    } catch (e) {
+        console.error("Crash during getAllResults:", e);
+        return [];
+    }
   },
   getUsers: async (): Promise<User[]> => {
     const [students, staff, mappingsData] = await Promise.all([
@@ -185,11 +199,19 @@ export const db = {
       await supabase.from('results').update({ status: 'working', violation_count: 0 }).gt('violation_count', 0);
   },
   getLightweightMonitoringData: async (): Promise<any> => {
-    const [students, results] = await Promise.all([
-        fetchAllRows('students', 'id, name, school, room, is_login, mappings'),
-        fetchAllRows('results', 'id, exam_id, peserta_id, status, score, finish_time, violation_count')
+    const [students, results, mappingsData] = await Promise.all([
+        fetchAllRows('students', 'id, name, school, room, is_login'),
+        fetchAllRows('results', 'id, exam_id, peserta_id, status, score, finish_time, violation_count'),
+        fetchAllRows('student_exam_mapping', 'student_id, room')
     ]);
-    return { students, results };
+    
+    // Join mappings into students
+    const studentsWithMappings = students.map(s => ({
+        ...s,
+        mappings: mappingsData.filter(m => m.student_id === s.id)
+    }));
+    
+    return { students: studentsWithMappings, results };
   },
   updateUser: async (id: string, user: Partial<User>) => {
     await supabase.from('students').update({
@@ -206,7 +228,8 @@ export const db = {
     });
   },
   getStaff: async (): Promise<User[]> => {
-    const { data } = await supabase.from('staff').select('*');
+    const { data, error } = await supabase.from('staff').select('*');
+    if (error) throw error;
     if(!data) return [];
     return data.map(d => ({
         id: d.id, name: d.name, username: d.username, password: d.password, role: d.role as UserRole,

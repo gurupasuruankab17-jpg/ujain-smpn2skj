@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { User, UserRole, AppSettings } from '../types';
 import { db } from '../services/database'; // SWITCHED TO REAL DB
 import { formatImageUrl } from '../utils/image';
-import { Users, LogOut, Shield, UserPlus, Trash2, Edit, Search, LayoutDashboard, Palette, Save, AlertTriangle, Speaker, Clock, Upload, Image as ImageIcon, Link } from 'lucide-react';
+import { Users, LogOut, Shield, UserPlus, Trash2, Edit, Search, LayoutDashboard, Palette, Save, AlertTriangle, Speaker, Clock, Upload, Image as ImageIcon, Link, Database } from 'lucide-react';
+import { updateSupabaseConfig, clearSupabaseConfig, getCurrentSupabaseUrl, getCurrentSupabaseKey } from '../services/supabase';
 
 interface Props {
     user: User;
@@ -13,7 +14,7 @@ interface Props {
 
 export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, settings, onSettingsChange }) => {
     const [users, setUsers] = useState<User[]>([]);
-    const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'USERS' | 'THEME' | 'ANTI_CHEAT' | 'WAKTU_SESI'>('DASHBOARD');
+    const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'USERS' | 'THEME' | 'ANTI_CHEAT' | 'WAKTU_SESI' | 'DATABASE'>('DASHBOARD');
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
     const [toast, setToast] = useState<{message: string, type: 'success' | 'error'} | null>(null);
     const [confirmModal, setConfirmModal] = useState<{message: string, onConfirm: () => void} | null>(null);
@@ -51,6 +52,11 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, settings,
         'Sesi 4': '15:30 - 17:30'
     });
 
+    // Database Config State
+    const [dbUrl, setDbUrl] = useState(getCurrentSupabaseUrl() || '');
+    const [dbAnonKey, setDbAnonKey] = useState(getCurrentSupabaseKey() || '');
+    const [isTestingDb, setIsTestingDb] = useState(false);
+
     // Form State for User
     const [newUserRole, setNewUserRole] = useState<UserRole>(UserRole.ADMIN);
     const [newName, setNewName] = useState('');
@@ -58,6 +64,43 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, settings,
     const [newNisn, setNewNisn] = useState('');
     const [newClass, setNewClass] = useState('');
     const [newPassword, setNewPassword] = useState('');
+
+    const handleSaveDatabaseConfig = async () => {
+        if (!dbUrl || !dbAnonKey) {
+            showToast('URL dan Anon Key harus diisi', 'error');
+            return;
+        }
+
+        setIsTestingDb(true);
+        try {
+            // Test connection first using auth health check or similar lightweight call
+            const { createClient } = await import('@supabase/supabase-js');
+            const testClient = createClient(dbUrl, dbAnonKey);
+            
+            // Try to hit settings table, if relation doesn't exist (42P01) it means connection works but schema is empty
+            const { error } = await testClient.from('settings').select('id').limit(1);
+            
+            if (error && error.code !== 'PGRST116' && error.code !== '42P01') { 
+                throw new Error(error.message);
+            }
+
+            showConfirm('Koneksi berhasil! Jika Anda menyimpan perubahan ini, sistem akan direload dan beralih ke database baru. Lanjutkan?', () => {
+                updateSupabaseConfig(dbUrl, dbAnonKey);
+                showToast('Konfigurasi database berhasil diperbarui. Aplikasi akan direload...', 'success');
+            });
+        } catch (err: any) {
+            console.error(err);
+            showToast(`Koneksi Gagal: ${err.message}`, 'error');
+        } finally {
+            setIsTestingDb(false);
+        }
+    };
+
+    const handleClearDatabaseConfig = () => {
+        showConfirm('Anda yakin ingin mereset database ke konfigurasi bawaan aplikasi? Aplikasi akan direload.', () => {
+            clearSupabaseConfig();
+        });
+    };
 
     useEffect(() => {
         loadData();
@@ -176,6 +219,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, settings,
                     <NavItem id="THEME" label="Tema & Logo" icon={Palette} />
                     <NavItem id="WAKTU_SESI" label="Waktu Sesi" icon={Clock} />
                     <NavItem id="ANTI_CHEAT" label="Anti Kecurangan" icon={AlertTriangle} />
+                    <NavItem id="DATABASE" label="Konfigurasi Database" icon={Database} />
                 </nav>
 
                 <div className="p-4 border-t border-white/10 bg-black/20">
@@ -523,6 +567,74 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, settings,
                         </div>
                     </div>
                 )}
+                {/* Database Setup View */}
+                {activeTab === 'DATABASE' && (
+                    <div className="animate-in fade-in">
+                        <h2 className="text-xl font-bold text-gray-800 mb-6">Konfigurasi Database Utama (Supabase)</h2>
+                        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 max-w-2xl">
+                            
+                            <div className="mb-6 p-4 rounded-lg bg-orange-50 border border-orange-200 flex items-start gap-3">
+                                <AlertTriangle className="text-orange-500 mt-0.5 flex-shrink-0" size={20} />
+                                <div>
+                                    <h4 className="font-bold text-orange-800 text-sm">Peringatan Berbahaya</h4>
+                                    <p className="text-orange-700 text-xs mt-1">Mengubah konfigurasi ini akan mengganti sumber data seluruh aplikasi (Users, Soal, Hasil Ujian). Pastikan database target memiliki skema tabel yang sama (Supabase URL & Anon Key). Semua pengguna yang login saat ini akan disconnect jika key tidak valid.</p>
+                                </div>
+                            </div>
+
+                            <div className="space-y-6 mb-8">
+                                <div>
+                                    <label className="block text-sm font-bold text-gray-700 mb-2">Supabase Project URL</label>
+                                    <div className="relative">
+                                        <Database className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                                        <input 
+                                            type="text"
+                                            value={dbUrl}
+                                            onChange={(e) => setDbUrl(e.target.value)}
+                                            placeholder="https://abcdefghijkl.supabase.co"
+                                            className="w-full pl-10 pr-4 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition font-mono bg-gray-50 text-gray-800"
+                                        />
+                                    </div>
+                                </div>
+                                
+                                <div>
+                                    <label className="block text-sm font-bold text-gray-700 mb-2">Supabase Anon Key</label>
+                                    <textarea 
+                                        value={dbAnonKey}
+                                        onChange={(e) => setDbAnonKey(e.target.value)}
+                                        placeholder="eyJhbGciOiJIUzI1NiIs..."
+                                        className="w-full px-4 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition resize-y min-h-[100px] font-mono bg-gray-50 text-gray-800"
+                                    />
+                                    <p className="text-xs text-gray-500 mt-2">Dapatkan kunci ini dari dashboard Supabase proyek Anda di bawah Settings &gt; API.</p>
+                                </div>
+                            </div>
+
+                            <div className="flex items-center gap-4 mt-8 pt-6 border-t">
+                                <button 
+                                    onClick={handleSaveDatabaseConfig}
+                                    disabled={isTestingDb}
+                                    className="bg-slate-800 text-white px-6 py-3 rounded-lg font-bold hover:bg-slate-900 transition flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {isTestingDb ? (
+                                        <div className="flex justify-center items-center gap-2">
+                                            <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                                            Mengetes Koneksi...
+                                        </div>
+                                    ) : (
+                                        <><Save size={18} className="mr-2" /> Simpan Konfigurasi DB</>
+                                    )}
+                                </button>
+                                <button 
+                                    onClick={handleClearDatabaseConfig}
+                                    className="bg-white text-red-600 border border-red-200 px-6 py-3 rounded-lg font-bold hover:bg-red-50 transition flex items-center"
+                                >
+                                    <Trash2 size={18} className="mr-2" /> Reset ke Default
+                                </button>
+                            </div>
+
+                        </div>
+                    </div>
+                )}
+
              </main>
 
              {/* Add User Modal */}

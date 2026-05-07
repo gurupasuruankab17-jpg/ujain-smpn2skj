@@ -685,8 +685,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, 
     }
   };
 
+  const [dataError, setDataError] = useState<string | null>(null);
+
   const loadData = async () => {
     setIsLoadingData(true);
+    setDataError(null);
     try {
       const e = await db.getExams(); 
       const u = await db.getUsers();
@@ -697,9 +700,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, 
         s = await db.getStaff();
       } catch (err: any) {
         console.error("Error loading staff:", err);
-        if (err.message?.includes('relation') || err.code === '42P01' || err.message?.includes('staff')) {
-          showToast("Tabel 'staff' belum dibuat di database.", 'error');
-        }
       }
       
       setExams(e);
@@ -721,8 +721,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, 
       setUsers(filteredUsers); 
       setResults(filteredResults);
       setStaffList(s);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error loading data:", err);
+      let errMsg = err.message || "Unknown error";
+      if (errMsg.includes('relation') || err.code === '42P01') {
+          errMsg = `Sistem gagal mengambil data. Tabel mungkin belum dibuat di database Supabase Anda (${errMsg}). Pastikan Anda telah menjalankan script supabase_schema.sql.`;
+      }
+      setDataError(errMsg);
+      showToast(errMsg, 'error');
     } finally {
       setIsLoadingData(false);
     }
@@ -3866,6 +3872,17 @@ ANS: B`;
                <h2 className="text-2xl font-bold text-gray-800 flex items-center">{activeTab.replace('_', ' ')}</h2>
                {isLoadingData && <span className="text-xs text-blue-500 animate-pulse flex items-center"><Loader2 size={12} className="animate-spin mr-1"/> Memuat Data...</span>}
           </header>
+
+          {dataError && (
+              <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl mb-6 shadow-sm flex items-start gap-3">
+                  <AlertTriangle className="text-red-500 flex-shrink-0 mt-0.5" />
+                  <div>
+                      <h4 className="font-bold">Masalah Koneksi Database</h4>
+                      <p className="text-sm mt-1">{dataError}</p>
+                      <button onClick={loadData} className="mt-3 bg-red-100 px-4 py-1.5 rounded-lg text-sm font-bold text-red-700 hover:bg-red-200 transition">Coba Muat Ulang</button>
+                  </div>
+              </div>
+          )}
 
           {/* DASHBOARD (Main & Sub-views handled by renderDashboardContent) */}
           {activeTab === 'DASHBOARD' && renderDashboardContent()}
