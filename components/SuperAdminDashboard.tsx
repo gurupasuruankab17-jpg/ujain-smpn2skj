@@ -106,8 +106,26 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, settings,
         loadData();
     }, []);
 
-    const loadData = () => {
-        db.getUsers().then(setUsers);
+    const [isLoadingData, setIsLoadingData] = useState(false);
+    const [dataError, setDataError] = useState<string | null>(null);
+
+    const loadData = async () => {
+        setIsLoadingData(true);
+        setDataError(null);
+        try {
+            const users = await db.getUsers();
+            setUsers(users);
+        } catch (err: any) {
+            console.error("Error loading users:", err);
+            let errMsg = err.message || "Unknown error";
+            if (errMsg.includes('relation') || err.code === '42P01') {
+                errMsg = `Tabel mungkin belum dibuat di database Supabase Anda (${errMsg}). Pastikan Anda telah menjalankan script supabase_schema.sql.`;
+            }
+            setDataError(errMsg);
+            showToast(errMsg, 'error');
+        } finally {
+            setIsLoadingData(false);
+        }
     };
 
     const handleDeleteUser = async (id: string) => {
@@ -230,6 +248,19 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, settings,
              </aside>
 
              <main className="flex-1 overflow-y-auto p-8">
+                {isLoadingData && <div className="mb-4 text-sm font-bold text-blue-500 animate-pulse">Memuat Data...</div>}
+                
+                {dataError && (
+                    <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl mb-6 shadow-sm flex items-start gap-3 animate-in fade-in">
+                        <AlertTriangle className="text-red-500 flex-shrink-0 mt-0.5" />
+                        <div>
+                            <h4 className="font-bold">Gagal Memuat Data</h4>
+                            <p className="text-sm mt-1">{dataError}</p>
+                            <button onClick={loadData} className="mt-3 bg-red-100 px-4 py-1.5 rounded-lg text-sm font-bold text-red-700 hover:bg-red-200 transition">Coba Muat Ulang</button>
+                        </div>
+                    </div>
+                )}
+
                 {/* Dashboard View */}
                 {activeTab === 'DASHBOARD' && (
                     <div className="animate-in fade-in">

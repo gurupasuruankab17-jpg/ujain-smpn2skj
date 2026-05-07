@@ -2,7 +2,7 @@ import { supabase } from './supabase';
 import { User, UserRole, Exam, Question, ExamResult, AppSettings } from '../types';
 
 // Supabase wrapper
-const fetchAllRows = async (table: string, selectQuery: string = '*', matchQuery?: Record<string, any>) => {
+const fetchAllRows = async (table: string, selectQuery: string = '*', matchQuery?: Record<string, any>, isRetry: boolean = false) => {
     let allData: any[] = [];
     let count = 0;
     while(true) {
@@ -14,6 +14,11 @@ const fetchAllRows = async (table: string, selectQuery: string = '*', matchQuery
         }
         const { data, error } = await query;
         if (error) {
+            // If it's a schema error (like undefined column 42703) and we are not using '*', fallback to '*'
+            if (!isRetry && selectQuery !== '*' && (error.code === '42703' || error.message?.includes('Could not find'))) {
+                console.warn(`Schema fallback for table ${table}: using '*' instead of '${selectQuery}'`);
+                return fetchAllRows(table, '*', matchQuery, true);
+            }
             console.error(`Error fetching from ${table}:`, error);
             throw error;
         }
@@ -64,26 +69,38 @@ export const db = {
     return undefined;
   },
   getExams: async (level?: 'SD'): Promise<Exam[]> => {
-    try {
-        // Optimization: Select only required columns and sum up real question lengths
-        const { data, error } = await supabase.from('subjects').select('id, name, duration, question_count, token, is_active, education_level, shuffle_questions, shuffle_options, school_access, questions(id, points)');
-        if (error) {
-            console.error("Error fetching exams:", error);
-            return [];
-        }
-        if(!data) return [];
-        return data.map(d => ({
-            id: d.id, title: d.name, subject: d.name, durationMinutes: d.duration, 
-            questionCount: d.questions?.length || 0,
-            token: d.token || '', isActive: d.is_active, 
-            questions: d.questions as unknown as Question[] || [], // Partial array of Questions for points counting
-            educationLevel: d.education_level || 'SD',
-            shuffleQuestions: d.shuffle_questions, shuffleOptions: d.shuffle_options, schoolAccess: d.school_access || []
-        }));
-    } catch (e) {
-        console.error("Crash during getExams:", e);
-        return [];
+    // Attempt to fetch with new columns, fallback to old schema if fails
+    let data, error;
+    
+    // First try with new columns
+    const res1 = await supabase.from('subjects').select('id, name, duration, question_count, token, is_active, education_level, shuffle_questions, shuffle_options, school_access, questions(id, points)');
+    
+    if (res1.error) {
+        console.warn("Schema mismatch, falling back to older schema:", res1.error.message);
+        // Fallback to older schema (without new columns)
+        const res2 = await supabase.from('subjects').select('id, name, duration, question_count, token, is_active, education_level, questions(id)');
+        data = res2.data;
+        error = res2.error;
+    } else {
+        data = res1.data;
+        error = res1.error;
     }
+
+    if (error) {
+        console.error("Error fetching exams:", error);
+        throw error;
+    }
+    if(!data) return [];
+    return data.map(d => ({
+        id: d.id, title: d.name, subject: d.name, durationMinutes: d.duration, 
+        questionCount: d.questions?.length || d.question_count || 0,
+        token: d.token || '', isActive: d.is_active, 
+        questions: d.questions as unknown as Question[] || [],
+        educationLevel: d.education_level || 'SD',
+        shuffleQuestions: d.shuffle_questions || false, 
+        shuffleOptions: d.shuffle_options || false, 
+        schoolAccess: d.school_access || []
+    }));
   },
   updateExamToken: async (examId: string, newToken: string): Promise<void> => {
     await supabase.from('subjects').update({ token: newToken }).eq('id', examId);
@@ -92,20 +109,43 @@ export const db = {
     await supabase.from('subjects').update({ token, duration: durationMinutes }).eq('id', examId);
   },
   createExam: async (exam: Exam): Promise<void> => {
-    const { data } = await supabase.from('subjects').insert({
+    let res = await supabase.from('subjects').insert({
         name: exam.title, duration: exam.durationMinutes, question_count: exam.questionCount, 
         token: exam.token, education_level: exam.educationLevel, school_access: exam.schoolAccess || [],
         shuffle_questions: exam.shuffleQuestions || false, shuffle_options: exam.shuffleOptions || false
     }).select().single();
+
+    if (res.error) {
+        console.warn("Schema mismatch, inserting without new columns:", res.error.message);
+        res = await supabase.from('subjects').insert({
+            name: exam.title, duration: exam.durationMinutes, question_count: exam.questionCount, 
+            token: exam.token, education_level: exam.educationLevel
+        }).select().single();
+    }
+
+    const { data, error } = res;
+    if (error) throw error;
+    
     if(data && exam.questions?.length > 0) {
-        await db.addQuestions(data.id, exam.questions);
+        try {
+            await db.addQuestions(data.id, exam.questions);
+        } catch (e) {
+            console.error("Error adding questions recursively:", e);
+        }
     }
   },
   addQuestions: async (examId: string, questions: any[]): Promise<void> => {
     const payloads = questions.map(q => ({
         subject_id: examId, type: q.type.toLowerCase().includes('pg') ? 'pg' : 'bs', content: q, points: q.points || 1
     }));
-    await supabase.from('questions').insert(payloads);
+    let res = await supabase.from('questions').insert(payloads);
+    if (res.error) {
+        console.warn("Schema mismatch for questions, inserting without new columns:", res.error.message);
+        const oldPayloads = questions.map(q => ({
+            subject_id: examId, type: q.type.toLowerCase().includes('pg') ? 'pg' : 'bs', content: q
+        }));
+        await supabase.from('questions').insert(oldPayloads);
+    }
   },
   submitResult: async (result: ExamResult): Promise<void> => {
     // Optimization: Bulk upsert to finalize result and sync massal
@@ -116,29 +156,24 @@ export const db = {
     }, { onConflict: 'exam_id,peserta_id' });
   },
   getAllResults: async (): Promise<ExamResult[]> => {
-    try {
-        const [data, students, subjects] = await Promise.all([
-            fetchAllRows('results', '*', { status: 'finished' }),
-            fetchAllRows('students', 'id, name'),
-            fetchAllRows('subjects', 'id, name')
-        ]);
+    const [data, students, subjects] = await Promise.all([
+        fetchAllRows('results', 'id, exam_id, peserta_id, session_id, score, status, start_time, finish_time, violation_count', { status: 'finished' }),
+        fetchAllRows('students', 'id, name'),
+        fetchAllRows('subjects', 'id, name')
+    ]);
 
-        return data.map(d => {
-            const student = students.find((s: any) => s.id === d.peserta_id);
-            const subject = subjects.find((s: any) => s.id === d.exam_id);
-            return {
-                id: d.id, studentId: d.peserta_id, examId: d.exam_id, 
-                score: d.score, submittedAt: d.finish_time,
-                studentName: student?.name || 'Unknown', 
-                examTitle: subject?.name || 'Unknown',
-                totalQuestions: 0, cheatingAttempts: d.violation_count || 0, 
-                answers: d.answers, status: d.status
-            };
-        });
-    } catch (e) {
-        console.error("Crash during getAllResults:", e);
-        return [];
-    }
+    return data.map(d => {
+        const student = students.find((s: any) => s.id === d.peserta_id);
+        const subject = subjects.find((s: any) => s.id === d.exam_id);
+        return {
+            id: d.id, studentId: d.peserta_id, examId: d.exam_id, 
+            score: d.score, submittedAt: d.finish_time,
+            studentName: student?.name || 'Unknown', 
+            examTitle: subject?.name || 'Unknown',
+            totalQuestions: 0, cheatingAttempts: d.violation_count || 0, 
+            answers: undefined, status: d.status
+        };
+    });
   },
   getUsers: async (): Promise<User[]> => {
     const [students, staff, mappingsData] = await Promise.all([
@@ -295,17 +330,27 @@ export const db = {
       shuffleQuestions: boolean, 
       shuffleOptions: boolean
   ) => {
-      await supabase.from('subjects').update({
+      let res = await supabase.from('subjects').update({
           token: token,
           duration: durationMinutes,
           school_access: schoolAccess,
           shuffle_questions: shuffleQuestions,
           shuffle_options: shuffleOptions
       }).eq('id', id);
+
+      if (res.error) {
+           await supabase.from('subjects').update({
+               token: token,
+               duration: durationMinutes
+           }).eq('id', id);
+      }
   },
   updateQuestion: async (q: any) => {
       if (q.id && q.id.length > 5) {
-          await supabase.from('questions').update({ content: q, points: q.points || 1, type: q.type.toLowerCase().includes('pg') ? 'pg' : 'bs' }).eq('id', q.id);
+          let res = await supabase.from('questions').update({ content: q, points: q.points || 1, type: q.type.toLowerCase().includes('pg') ? 'pg' : 'bs' }).eq('id', q.id);
+          if (res.error) {
+              await supabase.from('questions').update({ content: q, type: q.type.toLowerCase().includes('pg') ? 'pg' : 'bs' }).eq('id', q.id);
+          }
       }
   },
   deleteQuestion: async (id: string, sId: string) => {
@@ -362,7 +407,12 @@ export const db = {
   },
   getExamById: async (id: string): Promise<Exam | undefined> => {
       // Optimization: Select only necessary columns
-      const { data } = await supabase.from('subjects').select('id, name, duration, question_count, token, is_active, education_level, shuffle_options, shuffle_questions').eq('id', id).single();
+      let res = await supabase.from('subjects').select('id, name, duration, question_count, token, is_active, education_level, shuffle_options, shuffle_questions').eq('id', id).single();
+      if (res.error) {
+          // Fallback if shuffle_options/shuffle_questions missing
+          res = await supabase.from('subjects').select('id, name, duration, question_count, token, is_active, education_level').eq('id', id).single();
+      }
+      const { data } = res;
       if(!data) return undefined;
       // Fetch all questions in one go (Batch fetching)
       const { data: qData } = await supabase.from('questions').select('id, content').eq('subject_id', id);
@@ -370,8 +420,8 @@ export const db = {
       return {
           id: data.id, title: data.name, subject: data.name, durationMinutes: data.duration,
           questionCount: data.question_count, token: data.token, isActive: data.is_active,
-          educationLevel: data.education_level || 'SD', questions, shuffleOptions: data.shuffle_options,
-          shuffleQuestions: data.shuffle_questions
+          educationLevel: data.education_level || 'SD', questions, shuffleOptions: data.shuffle_options || false,
+          shuffleQuestions: data.shuffle_questions || false
       };
   },
   getStudentMappings: async (studentId: string): Promise<any> => {

@@ -588,7 +588,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, 
 
   useEffect(() => {
     loadData();
-    
+  }, []);
+
+  useEffect(() => {
     // Auto refresh for Monitoring & Anti-Cheat tab
     let interval: any;
     if (activeTab === 'MONITORING' || activeTab === 'ANTI_CHEAT' || activeTab === 'DASHBOARD') {
@@ -691,9 +693,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, 
     setIsLoadingData(true);
     setDataError(null);
     try {
-      const e = await db.getExams(); 
-      const u = await db.getUsers();
-      const r = await db.getAllResults();
+      let e: any[] = [];
+      let u: any[] = [];
+      let r: any[] = [];
+      
+      try { e = await db.getExams(); } catch (err) { console.error("Error getExams:", err); }
+      try { u = await db.getUsers(); } catch (err) { console.error("Error getUsers:", err); }
+      try { r = await db.getAllResults(); } catch (err) { console.error("Error getAllResults:", err); setDataError("Timeout memuat sebagian hasil ujian. Silakan coba lagi."); }
       
       let s: User[] = [];
       try {
@@ -718,8 +724,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, 
           filteredResults = r.filter(res => studentIds.has(res.studentId));
       }
 
-      setUsers(filteredUsers); 
-      setResults(filteredResults);
+      setUsers(prev => {
+          return filteredUsers.map(newUser => {
+              const p = prev.find(x => x.id === newUser.id);
+              if (p) {
+                  return { ...newUser, status: p.status, isLogin: p.isLogin || newUser.isLogin };
+              }
+              return newUser;
+          });
+      }); 
+      setResults(prev => {
+          const newArray = filteredResults.map(newResult => {
+              const p = prev.find(x => x.id === newResult.id);
+              if (p) {
+                   return { ...newResult, status: p.status || newResult.status, cheatingAttempts: Math.max(p.cheatingAttempts || 0, newResult.cheatingAttempts || 0) };
+              }
+              return newResult;
+          });
+          const merged = [...newArray];
+          for (const oldRes of prev) {
+             if (oldRes.status !== 'finished' && !merged.find(m => m.id === oldRes.id)) {
+                 merged.push(oldRes);
+             }
+          }
+          return merged;
+      });
       setStaffList(s);
     } catch (err: any) {
       console.error("Error loading data:", err);
