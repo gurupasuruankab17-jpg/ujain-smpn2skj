@@ -1,0 +1,23 @@
+340:  const [pelanggaranSubjectFilter, setPelanggaranSubjectFilter] = useState<string>('ALL');
+341:  const [pelanggaranSortConfig, setPelanggaranSortConfig] = useState<{key: string, direction: 'asc'|'desc'} | null>({key: 'cheatingAttempts', direction: 'desc'});
+882:          showToast("Pelanggaran di-reset.");
+2337:  const handleExportPelanggaranPDF = () => {
+2373:              <title>Riwayat Pelanggaran Peserta</title>
+2404:              <h3>Riwayat Pelanggaran Peserta</h3>
+2413:                          <th style="width: 20%">Banyak Pelanggaran</th>
+2612:                        <th>Pelanggaran</th>
+3621:                        <p className="text-sm font-medium text-gray-500">Pelanggaran</p>
+3841:                      <NavItem id="PELANGGARAN" label="Riwayat Pelanggaran" icon={AlertTriangle} />
+4820:                                  <th className="p-4 cursor-pointer hover:text-blue-600 text-center" onClick={() => handleResultSort('cheatingAttempts')}>Pelanggaran {resultSort.column === 'cheatingAttempts' && (resultSort.direction === 'asc' ? '↑' : '↓')}</th>
+5879:                          <h4 className="font-bold text-gray-800 mb-4 border-b pb-2 flex items-center text-red-600"><UserX size={18} className="mr-2"/> Riwayat Pelanggaran Peserta</h4>
+5893:                                               <th className="p-2 text-center">Pelanggaran</th>
+5935:                      <h3 className="font-bold text-lg flex items-center"><AlertTriangle size={24} className="mr-2 text-red-600"/> Riwayat Pelanggaran Peserta</h3>
+5936:                      <button onClick={handleExportPelanggaranPDF} className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-bold text-sm shadow-sm transition flex items-center gap-2 w-full md:w-auto justify-center">
+5947:                                  onChange={e => setPelanggaranSubjectFilter(e.target.value)}
+5962:                                      <th className="p-3 cursor-pointer hover:bg-gray-200 transition" onClick={() => setPelanggaranSortConfig({key: 'studentName', direction: pelanggaranSortConfig?.key === 'studentName' && pelanggaranSortConfig.direction === 'asc' ? 'desc' : 'asc'})}>
+5965:                                      <th className="p-3 cursor-pointer hover:bg-gray-200 transition" onClick={() => setPelanggaranSortConfig({key: 'examTitle', direction: pelanggaranSortConfig?.key === 'examTitle' && pelanggaranSortConfig.direction === 'asc' ? 'desc' : 'asc'})}>
+5968:                                      <th className="p-3 cursor-pointer hover:bg-gray-200 transition text-center" onClick={() => setPelanggaranSortConfig({key: 'cheatingAttempts', direction: pelanggaranSortConfig?.key === 'cheatingAttempts' && pelanggaranSortConfig.direction === 'desc' ? 'asc' : 'desc'})}>
+5969:                                          <div className="flex justify-center items-center gap-1">Banyak Pelanggaran <ArrowRightLeft size={12} className="rotate-90"/></div>
+5971:                                      <th className="p-3 text-center">Tingkat Pelanggaran</th>
+6044:                          <h4 className="font-bold text-gray-800 mb-2">Reset Pelanggaran</h4>
+6050:                              Reset Semua Pelanggaran
